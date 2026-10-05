@@ -7,11 +7,11 @@
 # - Volume: 4.800 m³
 # - Renovação: 10%/dia
 # - Passo de integração: 1 hora
-# - Horizonte: 365 dias
+# - Simulação: 5 anos para estabilização térmica
+# - Resultados e gráficos: último ano estabilizado
 # - 6 camadas verticais
 # - Chuva DESCONSIDERADA
 # - Temperatura do córrego = senoide anual
-# - Sazonalidade ajustada para Palotina/PR (hemisfério sul)
 #
 # Bibliotecas:
 # numpy
@@ -118,13 +118,23 @@ for i, z in enumerate(PROFUNDIDADES):
 # 5. SIMULAÇÃO TEMPORAL
 # ==============================================================
 
-DIAS = 365
 DT = 3600.0  # 1 hora em segundos
 
-N_PASSOS = DIAS * 24
+# Simulamos vários anos para eliminar o efeito da
+# condição inicial artificial e atingir regime periódico.
+ANOS_SIMULACAO = 5
+DIAS_ANO = 365
+HORAS_DIA = 24
+
+DIAS = ANOS_SIMULACAO * DIAS_ANO
+N_PASSOS = DIAS * HORAS_DIA
 
 tempo_h = np.arange(N_PASSOS) * DT / 3600.0
-dia_ano = tempo_h / 24.0
+dia_global = tempo_h / 24.0
+
+# Dia dentro do ciclo anual.
+# Mantém a meteorologia exatamente periódica a cada 365 dias.
+dia_ano = np.mod(dia_global, DIAS_ANO)
 
 data_inicio = pd.Timestamp("2025-01-01")
 
@@ -145,8 +155,6 @@ T_CORREGO_MEDIA = 21.85
 T_CORREGO_AMPLITUDE = 4.05
 
 # Fase da senoide
-# Ajustada para Palotina/PR (hemisfério sul).
-# Máximo aproximadamente em meados de janeiro.
 FASE_CORREGO = 289.0
 
 
@@ -184,11 +192,8 @@ def temperatura_ar(dia, hora):
     media_anual = 21.85
     amplitude_anual = 4.5
 
-    # ==========================================================
-    # CORREÇÃO SAZONAL - PALOTINA/PR
-    # ==========================================================
-    # No hemisfério sul, o máximo térmico ocorre no verão.
-    # A fase 289 coloca o pico aproximadamente em meados de janeiro.
+    # Fase ajustada para Palotina/PR (hemisfério sul).
+    # Máximo aproximadamente em meados de janeiro.
     FASE_AR = 289.0
 
     componente_anual = (
@@ -202,6 +207,7 @@ def temperatura_ar(dia, hora):
 
     # ciclo diário
     amplitude_diaria = 4.5
+
     componente_diaria = (
         amplitude_diaria
         * np.sin(
@@ -270,11 +276,8 @@ def radiacao_solar(dia, hora):
     if hora < hora_nascer or hora > hora_por:
         return 0.0
 
-    # ==========================================================
-    # FATOR SAZONAL DA RADIAÇÃO - PALOTINA/PR
-    # ==========================================================
-    # O máximo da radiação diária deve ocorrer no verão,
-    # aproximadamente em janeiro, e o mínimo no inverno.
+    # Fator sazonal ajustado para Palotina/PR.
+    # Máximo aproximadamente em janeiro.
     FASE_SOLAR = 289.0
 
     fator_sazonal = (
@@ -443,14 +446,6 @@ Q_MISTURA_HIST = np.zeros(N_PASSOS)
 # 13. LOOP PRINCIPAL DA SIMULAÇÃO
 # ==============================================================
 
-print("\n=========== CONFIGURAÇÃO SAZONAL ===========")
-print("Local de referência    : Palotina/PR")
-print("Hemisfério             : Sul")
-print("Pico térmico esperado  : aproximadamente janeiro")
-print("Mínimo térmico esperado: aproximadamente julho")
-print("Fase do córrego        :", FASE_CORREGO)
-print("Fase do ar             : 289.0")
-print("Fase da radiação       : 289.0")
 print("\n=========== INICIANDO SIMULAÇÃO ==========")
 
 for n in range(N_PASSOS):
@@ -643,26 +638,86 @@ for n in range(N_PASSOS):
 
 print("Simulação concluída.")
 
+# ==============================================================
+# 13.1. SELEÇÃO DO ÚLTIMO ANO
+# ==============================================================
+
+PASSOS_POR_ANO = DIAS_ANO * HORAS_DIA
+
+INICIO_ULTIMO_ANO = (ANOS_SIMULACAO - 1) * PASSOS_POR_ANO
+FIM_ULTIMO_ANO = ANOS_SIMULACAO * PASSOS_POR_ANO
+
+# Somente o último ano será usado nos gráficos e resultados.
+datas_analise = datas[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+
+dia_ano_analise = np.arange(PASSOS_POR_ANO) / HORAS_DIA
+
+T_CORREGO_analise = T_CORREGO[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+T_HIST_analise = T_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO, :]
+T_MEDIA_analise = T_MEDIA_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+T_SUPERFICIE_analise = T_SUPERFICIE_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+T_FUNDO_analise = T_FUNDO_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+
+T_AR_analise = T_AR_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+UR_analise = UR_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+VENTO_analise = VENTO_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+RAD_analise = RAD_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+
+Q_SOLAR_analise = Q_SOLAR_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+Q_EVAP_analise = Q_EVAP_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+Q_CONV_analise = Q_CONV_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+Q_RAD_analise = Q_RAD_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+Q_CORREGO_analise = Q_CORREGO_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+Q_MISTURA_analise = Q_MISTURA_HIST[INICIO_ULTIMO_ANO:FIM_ULTIMO_ANO]
+
+# Verificação de estabilização:
+# comparamos o início do último ciclo com o mesmo instante
+# do ciclo anual anterior.
+ERRO_ENTRE_CICLOS = abs(
+    T_MEDIA_HIST[INICIO_ULTIMO_ANO]
+    - T_MEDIA_HIST[INICIO_ULTIMO_ANO - PASSOS_POR_ANO]
+)
+
+ERRO_PRIMEIRO_ULTIMO_PONTO = abs(
+    T_MEDIA_analise[0]
+    - T_MEDIA_analise[-1]
+)
+
+print("\n=========== FECHAMENTO DO CICLO ===========")
+print(f"Temperatura início do último ano : {T_MEDIA_analise[0]:.3f} °C")
+print(f"Temperatura final do último ano  : {T_MEDIA_analise[-1]:.3f} °C")
+print(f"Diferença primeiro/último ponto  : {ERRO_PRIMEIRO_ULTIMO_PONTO:.4f} °C")
+print(f"Diferença entre ciclos anuais    : {ERRO_ENTRE_CICLOS:.4f} °C")
+
+if ERRO_ENTRE_CICLOS < 0.01:
+    print("STATUS: ciclo térmico altamente estabilizado.")
+elif ERRO_ENTRE_CICLOS < 0.05:
+    print("STATUS: ciclo térmico bem estabilizado.")
+elif ERRO_ENTRE_CICLOS < 0.10:
+    print("STATUS: ciclo térmico próximo da estabilização.")
+else:
+    print("STATUS: ainda existe diferença significativa entre os ciclos.")
+
 
 # ==============================================================
 # 14. DATAFRAME DE RESULTADOS
 # ==============================================================
 
 resultados = pd.DataFrame({
-    "data": datas,
-    "dia_ano": dia_ano,
-    "T_corrego_C": T_CORREGO,
-    "T_ar_C": T_AR_HIST,
-    "UR_percent": UR_HIST,
-    "vento_m_s": VENTO_HIST,
-    "radiacao_W_m2": RAD_HIST,
-    "T_superficie_C": T_SUPERFICIE_HIST,
-    "T_media_C": T_MEDIA_HIST,
-    "T_fundo_C": T_FUNDO_HIST
+    "data": datas_analise,
+    "dia_ano": dia_ano_analise,
+    "T_corrego_C": T_CORREGO_analise,
+    "T_ar_C": T_AR_analise,
+    "UR_percent": UR_analise,
+    "vento_m_s": VENTO_analise,
+    "radiacao_W_m2": RAD_analise,
+    "T_superficie_C": T_SUPERFICIE_analise,
+    "T_media_C": T_MEDIA_analise,
+    "T_fundo_C": T_FUNDO_analise
 })
 
 for i in range(N_CAMADAS):
-    resultados[f"T_camada_{i+1}_C"] = T_HIST[:, i]
+    resultados[f"T_camada_{i+1}_C"] = T_HIST_analise[:, i]
 
 
 # ==============================================================
@@ -673,11 +728,11 @@ print("\n==========================================")
 print(" RESULTADOS DA SIMULAÇÃO")
 print("==========================================")
 
-print(f"Temperatura média do tanque: {T_MEDIA_HIST.mean():.2f} °C")
-print(f"Temperatura mínima do tanque: {T_MEDIA_HIST.min():.2f} °C")
-print(f"Temperatura máxima do tanque: {T_MEDIA_HIST.max():.2f} °C")
-print(f"Temperatura mínima do córrego: {T_CORREGO.min():.2f} °C")
-print(f"Temperatura máxima do córrego: {T_CORREGO.max():.2f} °C")
+print(f"Temperatura média do tanque: {T_MEDIA_analise.mean():.2f} °C")
+print(f"Temperatura mínima do tanque: {T_MEDIA_analise.min():.2f} °C")
+print(f"Temperatura máxima do tanque: {T_MEDIA_analise.max():.2f} °C")
+print(f"Temperatura mínima do córrego: {T_CORREGO_analise.min():.2f} °C")
+print(f"Temperatura máxima do córrego: {T_CORREGO_analise.max():.2f} °C")
 
 
 # ==============================================================
@@ -687,8 +742,8 @@ print(f"Temperatura máxima do córrego: {T_CORREGO.max():.2f} °C")
 plt.figure(figsize=(14, 5))
 
 plt.plot(
-    datas,
-    T_CORREGO,
+    datas_analise,
+    T_CORREGO_analise,
     color="blue",
     linewidth=2
 )
@@ -709,10 +764,10 @@ plt.show()
 
 plt.figure(figsize=(14, 6))
 
-plt.plot(datas, T_CORREGO, label="Córrego", color="blue", linewidth=1.5)
-plt.plot(datas, T_SUPERFICIE_HIST, label="Superfície", color="red", linewidth=1.5)
-plt.plot(datas, T_MEDIA_HIST, label="Média do tanque", color="black", linewidth=2)
-plt.plot(datas, T_FUNDO_HIST, label="Fundo", color="green", linewidth=1.5)
+plt.plot(datas_analise, T_CORREGO_analise, label="Córrego", color="blue", linewidth=1.5)
+plt.plot(datas_analise, T_SUPERFICIE_analise, label="Superfície", color="red", linewidth=1.5)
+plt.plot(datas_analise, T_MEDIA_analise, label="Média do tanque", color="black", linewidth=2)
+plt.plot(datas_analise, T_FUNDO_analise, label="Fundo", color="green", linewidth=1.5)
 
 plt.title("Evolução anual da temperatura do tanque")
 plt.xlabel("Data")
@@ -731,9 +786,9 @@ plt.show()
 
 plt.figure(figsize=(14, 6))
 
-plt.plot(datas, T_AR_HIST, label="Temperatura do ar", color="orange", alpha=0.7)
-plt.plot(datas, T_MEDIA_HIST, label="Temperatura média do tanque", color="blue", linewidth=2)
-plt.plot(datas, T_CORREGO, label="Temperatura do córrego", color="green", linewidth=1.5)
+plt.plot(datas_analise, T_AR_analise, label="Temperatura do ar", color="orange", alpha=0.7)
+plt.plot(datas_analise, T_MEDIA_analise, label="Temperatura média do tanque", color="blue", linewidth=2)
+plt.plot(datas_analise, T_CORREGO_analise, label="Temperatura do córrego", color="green", linewidth=1.5)
 
 plt.title("Temperatura do ar, córrego e tanque")
 plt.xlabel("Data")
@@ -753,11 +808,11 @@ plt.show()
 plt.figure(figsize=(15, 7))
 
 im = plt.imshow(
-    T_HIST.T,
+    T_HIST_analise.T,
     aspect="auto",
     origin="upper",
     cmap="turbo",
-    extent=[0, DIAS, PROFUNDIDADE, 0]
+    extent=[0, DIAS_ANO, PROFUNDIDADE, 0]
 )
 
 plt.colorbar(im, label="Temperatura (°C)")
@@ -781,10 +836,10 @@ nomes = ["Verão", "Outono", "Inverno", "Primavera"]
 plt.figure(figsize=(9, 7))
 
 for dia, nome in zip(dias_representativos, nomes):
-    indice = min(int(dia * 24), N_PASSOS - 1)
+    indice = min(int(dia * 24), PASSOS_POR_ANO - 1)
 
     plt.plot(
-        T_HIST[indice, :],
+        T_HIST_analise[indice, :],
         PROFUNDIDADES,
         marker="o",
         linewidth=2,
@@ -810,11 +865,11 @@ plt.show()
 # Conversão para kW
 plt.figure(figsize=(15, 7))
 
-plt.plot(datas, Q_SOLAR_HIST / 1000, label="Solar", linewidth=1)
-plt.plot(datas, -Q_EVAP_HIST / 1000, label="Evaporação", linewidth=1)
-plt.plot(datas, -Q_CONV_HIST / 1000, label="Convecção", linewidth=1)
-plt.plot(datas, -Q_RAD_HIST / 1000, label="Radiação", linewidth=1)
-plt.plot(datas, Q_CORREGO_HIST / 1000, label="Córrego", linewidth=1)
+plt.plot(datas_analise, Q_SOLAR_analise / 1000, label="Solar", linewidth=1)
+plt.plot(datas_analise, -Q_EVAP_analise / 1000, label="Evaporação", linewidth=1)
+plt.plot(datas_analise, -Q_CONV_analise / 1000, label="Convecção", linewidth=1)
+plt.plot(datas_analise, -Q_RAD_analise / 1000, label="Radiação", linewidth=1)
+plt.plot(datas_analise, Q_CORREGO_analise / 1000, label="Córrego", linewidth=1)
 
 plt.axhline(0, color="black", linewidth=0.8)
 plt.xlabel("Data")
@@ -845,11 +900,37 @@ resultados_diarios = (
     })
 )
 
+# Para visualização de um ciclo anual fechado, adicionamos
+# o primeiro ponto novamente ao final, exatamente 365 dias depois.
+# Isso não altera os dados físicos nem o CSV; apenas fecha visualmente
+# a periodicidade do ciclo no gráfico.
+
+data_grafico = resultados_diarios.index.append(
+    pd.DatetimeIndex([
+        resultados_diarios.index[0] + pd.Timedelta(days=365)
+    ])
+)
+
+T_corrego_grafico = np.append(
+    resultados_diarios["T_corrego_C"].values,
+    resultados_diarios["T_corrego_C"].iloc[0]
+)
+
+T_media_grafico = np.append(
+    resultados_diarios["T_media_C"].values,
+    resultados_diarios["T_media_C"].iloc[0]
+)
+
+T_ar_grafico = np.append(
+    resultados_diarios["T_ar_C"].values,
+    resultados_diarios["T_ar_C"].iloc[0]
+)
+
 plt.figure(figsize=(14, 6))
 
-plt.plot(resultados_diarios.index, resultados_diarios["T_corrego_C"], label="Córrego", linewidth=2)
-plt.plot(resultados_diarios.index, resultados_diarios["T_media_C"], label="Tanque", linewidth=2)
-plt.plot(resultados_diarios.index, resultados_diarios["T_ar_C"], label="Ar", alpha=0.6)
+plt.plot(data_grafico, T_corrego_grafico, label="Córrego", linewidth=2)
+plt.plot(data_grafico, T_media_grafico, label="Tanque", linewidth=2)
+plt.plot(data_grafico, T_ar_grafico, label="Ar", alpha=0.6)
 
 plt.xlabel("Data")
 plt.ylabel("Temperatura média diária (°C)")
