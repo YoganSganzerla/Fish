@@ -42,7 +42,7 @@ import random
 import time
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 # ============================================================
@@ -52,7 +52,7 @@ from datetime import datetime
 HOST = "https://us-east-1-1.aws.cloud2.influxdata.com"
 TOKEN = "7nrflevA_ZN2YGy57rSJu2YxtyidVzsZQYDROoHZSQI6F2mIixMRVdKo2rxMrZIIB6hpOTmOVB5OKYwNkYcsWw=="
 ORG = "Fish"
-DATABASE = "fishfarm"
+DATABASE = "fishfarm_sim"
 
 client = InfluxDBClient3(
 host=HOST,
@@ -85,16 +85,36 @@ class TankConfig:
     # TANQUE
     # --------------------------------------------------------
 
-    volume_liters: float = 10000.0
+    # GEOMETRIA REAL
 
-    # profundidade média
-    depth_m: float = 1.5
+    length_m: float = 150.0
+
+    width_m: float = 16.0
+
+    depth_m: float = 2.0
+
+    area_m2: float = 2400.0
+
+    volume_liters: float = 4800000.0
 
     # --------------------------------------------------------
     # PEIXES
     # --------------------------------------------------------
 
-    biomass_kg: float = 150.0
+    # ESTOCAGEM
+
+    fish_per_m2: float = 30.0
+
+    initial_weight_g: float = 30.0
+    fish_count: int = int(area_m2 * fish_per_m2)
+
+    # GOMPERTZ
+
+    gompertz_A: float = 1200.0
+
+    gompertz_B: float = 3.6889
+
+    gompertz_k: float = 0.0085
 
     # consumo aproximado de O2 por kg de biomassa/h
     fish_o2_rate: float = 0.015
@@ -135,7 +155,7 @@ class TankConfig:
     reaeration_rate: float = 0.015
 
     # capacidade máxima dos aeradores
-    aerator_capacity: float = 0.12
+    aerator_capacity: float = 1.50
 
     # --------------------------------------------------------
     # PH
@@ -191,10 +211,17 @@ class TankConfig:
     aerator_on_do: float = 5.0
 
     aerator_off_do: float = 7.0
-
-
 CONFIG = TankConfig()
 
+
+# ============================================================
+# VELOCIDADE DA SIMULAÇÃO
+# ============================================================
+
+REAL_TIME_MODE = False
+
+# 1 minuto real = 1 dia simulado
+SIMULATION_SPEED = 1440
 
 # ============================================================
 # ESTADO DO DIGITAL TWIN
@@ -209,7 +236,13 @@ class TankState:
     tan: float
     water_level: float
 
+    fish_count: int
+
+    average_weight_g: float
+
     biomass_kg: float
+
+    age_days: float = 0.0
 
     aerator_1: int = 0
     aerator_2: int = 0
@@ -228,7 +261,15 @@ do=CONFIG.initial_do,
 ph=CONFIG.initial_ph,
 tan=CONFIG.initial_tan,
 water_level=CONFIG.initial_water_level,
-biomass_kg=CONFIG.biomass_kg
+
+fish_count=CONFIG.fish_count,
+
+average_weight_g=CONFIG.initial_weight_g,
+
+biomass_kg=(
+    CONFIG.fish_count
+    * CONFIG.initial_weight_g
+) / 1000
 )
 
 
@@ -243,6 +284,23 @@ def clamp(value, minimum, maximum):
 def gaussian_noise(std):
     return random.gauss(0, std)
 
+
+# ============================================================
+# GOMPERTZ
+# ============================================================
+
+def gompertz_weight(days):
+
+    return (
+        CONFIG.gompertz_A
+        * math.exp(
+            -CONFIG.gompertz_B
+            * math.exp(
+                -CONFIG.gompertz_k
+                * days
+            )
+        )
+    )
 
 # ============================================================
 # ESTAÇÃO DO ANO
@@ -833,29 +891,14 @@ def update_water_level(state, now, dt_hours):
 # ============================================================
 # BIOMASSA
 # ============================================================
-
 def update_biomass(state, dt_hours):
 
-    """
-    Modelo simplificado de crescimento.
-
-    O crescimento é limitado por:
-    temperatura
-    OD
-    NH3
-
-    Não deve ser considerado ainda como modelo
-    zootécnico definitivo.
-    """
-
-    # fator temperatura
     temperature_factor = clamp(
         1.0 - abs(state.temperature - 27.0) / 15.0,
         0.0,
         1.0
     )
 
-    # fator OD
     oxygen_factor = clamp(
         (state.do - 2.0) / 4.0,
         0.0,
@@ -874,25 +917,29 @@ def update_biomass(state, dt_hours):
         1.0
     )
 
-    growth_factor = (
+    environment_factor = (
         temperature_factor
         * oxygen_factor
         * ammonia_factor
     )
 
-    # aproximadamente 0.2% ao dia
-    daily_growth = (
-        0.002
-        * growth_factor
-    )
-
-    state.biomass_kg += (
-        state.biomass_kg
-        * daily_growth
-        * dt_hours
+    state.age_days += (
+        dt_hours
         / 24.0
+        * environment_factor
     )
 
+    state.average_weight_g = (
+        gompertz_weight(
+            state.age_days
+        )
+    )
+
+    state.biomass_kg = (
+        state.fish_count
+        * state.average_weight_g
+    ) / 1000
+    
 # ============================================================
 # CICLO COMPLETO DO DIGITAL TWIN
 # ============================================================
@@ -1027,6 +1074,7 @@ def write_to_influx(state, now):
 
     point = (
         Point("tank_state")
+        .time(datetime.utcnow().isoformat())
 
         .tag("tank", CONFIG.tank_id)
         .tag("season", season)
@@ -1108,6 +1156,26 @@ def write_to_influx(state, now):
         .field(
             "inlet_valve",
             state.inlet_valve
+        )
+        .field(
+    "fish_count",
+    state.fish_count
+)
+
+        .field(
+            "average_weight_g",
+            round(
+                state.average_weight_g,
+                2
+            )
+        )
+
+        .field(
+            "culture_day",
+            round(
+                state.age_days,
+                2
+            )
         )
     )
 
@@ -1201,6 +1269,19 @@ def print_status(state, now):
     print(
         f"INLET VALVE = {state.inlet_valve:.0f}%"
     )
+    print(
+    f"FISH COUNT = {state.fish_count}"
+    )
+
+    print(
+        f"AVG WEIGHT = "
+        f"{state.average_weight_g:.2f} g"
+    )
+
+    print(
+        f"CULTURE DAY = "
+        f"{state.age_days:.1f}"
+    )
 
     print(
         "=" * 70
@@ -1266,38 +1347,52 @@ f"Latitude: {CONFIG.latitude}"
 
 print(f"Longitude: {CONFIG.longitude}")
 
-print(f"Biomassa inicial: "f"{CONFIG.biomass_kg} kg")
+print(
+    f"Biomassa inicial: "
+    f"{state.biomass_kg:.2f} kg"
+)
 
 print("============================================\n")
-
 
 # ------------------------------------------------------------
 # RELÓGIO DO DIGITAL TWIN
 # ------------------------------------------------------------
 
-last_update = datetime.now()
+if REAL_TIME_MODE:
+
+    last_update = datetime.now()
+
+else:
+
+    simulation_time = datetime.now()
+
 
 while True:
 
-    now = datetime.now()
+    if REAL_TIME_MODE:
 
-    # tempo real transcorrido
-    elapsed_seconds = (
-        now - last_update
-    ).total_seconds()
+        now = datetime.now()
 
-    last_update = now
+        elapsed_seconds = (
+            now - last_update
+        ).total_seconds()
 
-    # converter para horas
+        last_update = now
+
+    else:
+
+        elapsed_seconds = (
+            SIMULATION_SPEED
+        )
+
+        simulation_time += timedelta(
+            seconds=SIMULATION_SPEED
+        )
+
+        now = simulation_time
+
     dt_hours = (
         elapsed_seconds / 3600.0
-    )
-
-    # limitar passo para evitar instabilidade
-    dt_hours = clamp(
-        dt_hours,
-        0.001,
-        0.25
     )
 
     # --------------------------------------------------------
@@ -1310,6 +1405,36 @@ while True:
         dt_hours
     )
 
+    if state.age_days >= 365:
+
+        print("\n")
+        print("=" * 70)
+        print("FIM DO CICLO PRODUTIVO")
+        print("=" * 70)
+
+        print(
+            f"Dias de cultivo: {state.age_days:.1f}"
+        )
+
+        print(
+            f"Peso médio final: "
+            f"{state.average_weight_g:.2f} g"
+        )
+
+        print(
+            f"Biomassa final: "
+            f"{state.biomass_kg:.2f} kg"
+        )
+
+        print(
+            f"Peixes estocados: "
+            f"{state.fish_count}"
+        )
+
+        print("=" * 70)
+
+        break
+    
     # --------------------------------------------------------
     # SALVAR
     # --------------------------------------------------------
@@ -1332,4 +1457,4 @@ while True:
     # INTERVALO DE SIMULAÇÃO
     # --------------------------------------------------------
 
-    time.sleep(10)
+    time.sleep(1)
